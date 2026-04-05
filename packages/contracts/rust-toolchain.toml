@@ -1,0 +1,26 @@
+# rust-toolchain.toml
+#
+# Declares the pinned Rust toolchain for the very-princess contracts package.
+# All Rust tooling (cargo, clippy, rustfmt, stellar-cli) and the GitHub Actions
+# CI workflow read this file automatically via rustup.
+#
+# ── Why 1.88.0? ──────────────────────────────────────────────────────────────
+# The transitive dependency tree pulled in by soroban-sdk v21 requires:
+#
+#   darling@0.23    → rust-version = "1.88"
+#   serde_with@3.18 → rust-version = "1.88"
+#   time@0.3.47     → rust-version = "1.88"
+#   time-core@0.1.8 → edition2024 (stabilised in 1.85)
+#
+# 1.88.0 satisfies all constraints. Do not lower this floor without first
+# running `cargo update` and verifying the new resolution still compiles.
+#
+# ── Bumping ───────────────────────────────────────────────────────────────────
+# When upgrading soroban-sdk, run `cargo update`, check if any new dependency
+# raises the minimum, and bump the version here + in .github/workflows/ci.yml
+# in the same commit.
+
+[toolchain]
+channel = "1.88.0"
+targets = ["wasm32-unknown-unknown"]
+components = ["clippy", "rustfmt"]

@@ -56,10 +56,12 @@ concurrency:
 # single-line change and keeps all jobs in sync.
 env:
   NODE_VERSION: "20"
-  # Minimum Rust 1.85.0 required: transitive dependency `time-core v0.1.8`
-  # (pulled in by soroban-ledger-snapshot) uses edition2024, which was
-  # stabilized in Rust 1.85.0. Do not lower this floor.
-  RUST_VERSION: "1.85.0"
+  # Minimum Rust 1.88.0 required by the transitive dependency tree:
+  # darling@0.23, serde_with@3.18, and time@0.3.47 all declare
+  # `rust-version = "1.88"` in their manifests. The edition2024 requirement
+  # from time-core also needs >=1.85, so 1.88 satisfies both constraints.
+  # Bump this together with soroban-sdk upgrades that pull in newer deps.
+  RUST_VERSION: "1.88.0"
   # stellar-cli version must match the soroban-sdk version used in Cargo.toml
   # (currently soroban-sdk v21). Bump both together on SDK upgrades.
   SOROBAN_CLI_VERSION: "21.0.0"
