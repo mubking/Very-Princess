@@ -85,13 +85,16 @@ jobs:
         uses: actions/checkout@v4
 
       # 2. Install Node.js and enable the built-in npm dependency cache.
-      #    The cache key is derived from package-lock.json so a clean install
-      #    is only triggered when dependencies actually change.
+      #    cache-dependency-path tells the action exactly where the root
+      #    package-lock.json lives — without this, setup-node searches the
+      #    working directory and can fail in monorepos where the runner's
+      #    cwd differs from the checkout root.
       - name: Setup Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: "npm"
+          cache-dependency-path: package-lock.json
 
       # 3. Install all workspace dependencies using the lockfile exactly
       #    (`npm ci` instead of `npm install`) to guarantee reproducibility.
