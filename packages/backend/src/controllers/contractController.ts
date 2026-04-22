@@ -15,6 +15,8 @@
  */
 
 import { stellarService } from "../services/stellarService.js";
+import { prisma } from "../services/db.js";
+import { redis } from "../services/cache.js";
 
 // ─── Response Types ───────────────────────────────────────────────────────────
 
@@ -22,6 +24,15 @@ export interface OrgResponse {
   id: string;
   name: string;
   admin: string;
+}
+
+export interface PaginatedOrgsResponse {
+  data: OrgResponse[];
+  meta: {
+    totalPages: number;
+    currentPage: number;
+    totalCount: number;
+  };
 }
 
 export interface MaintainersResponse {
@@ -61,6 +72,87 @@ export interface PayoutResponse {
 // ─── Controller ───────────────────────────────────────────────────────────────
 
 export const contractController = {
+  /**
+   * Fetch a paginated list of organizations.
+   * Caches the first page in Redis for high performance.
+   */
+  async getOrganizations(page: number, limit: number): Promise<PaginatedOrgsResponse> {
+    const skip = (page - 1) * limit;
+    const cacheKey = `orgs:page:${page}:limit:${limit}`;
+
+    // 1. Try cache if it's the first page
+    if (page === 1) {
+      const cached = await redis.get(cacheKey);
+      if (cached) {
+        return JSON.parse(cached);
+      }
+    }
+
+    // 2. Fetch from DB
+    const [orgs, totalCount] = await Promise.all([
+      prisma.organization.findMany({
+        skip,
+        take: limit,
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.organization.count(),
+    ]);
+
+    const totalPages = Math.ceil(totalCount / limit);
+    const response: PaginatedOrgsResponse = {
+      data: orgs.map((org) => ({
+        id: org.id,
+        name: org.name,
+        admin: org.admin,
+      })),
+      meta: {
+        totalPages,
+        currentPage: page,
+        totalCount,
+      },
+    };
+
+    // 3. Cache the first page for 5 minutes
+    if (page === 1) {
+      await redis.set(cacheKey, JSON.stringify(response), "EX", 300);
+    }
+
+    return response;
+  },
+
+  /**
+   * Register a new organization and index it in the local database.
+   */
+  async registerOrganization(
+    id: string,
+    name: string,
+    admin: string,
+    signerSecret: string
+  ): Promise<FundResponse> {
+    const result = await stellarService.registerOrg(id, name, admin, signerSecret);
+    
+    // Index in DB for pagination
+    if (result.success) {
+      await prisma.organization.upsert({
+        where: { id },
+        update: { name, admin },
+        create: { id, name, admin },
+      });
+
+      // Invalidate the first page cache
+      const cacheKey = "orgs:page:1:limit:10";
+      await redis.del(cacheKey);
+    }
+
+    return {
+      success: result.success,
+      transactionHash: result.transactionHash,
+      orgId: id,
+      donor: admin,
+      amountStroops: "0",
+    };
+  },
+
   /**
    * Fetch the details of a registered organization.
    */

@@ -24,6 +24,14 @@ import { contractController } from "../controllers/contractController.js";
 
 // ─── Validation Schemas ──────────────────────────────────────────────────────
 
+/** Validation for the POST /orgs registration request body. */
+const RegisterOrgBody = z.object({
+  id: z.string().min(1).max(9),
+  name: z.string().min(1).max(64),
+  admin: z.string().startsWith("G").length(56),
+  signerSecret: z.string().startsWith("S").length(56),
+});
+
 /** Validation for the POST /orgs/:orgId/fund request body. */
 const FundOrgBody = z.object({
   fromAddress: z.string().startsWith("G").length(56),
@@ -52,6 +60,74 @@ const AllocatePayoutBody = z.object({
 // ─── Route Plugin ────────────────────────────────────────────────────────────
 
 export const contractRoutes: FastifyPluginAsync = async (fastify) => {
+  /**
+   * GET /orgs
+   * Returns a paginated list of registered organizations.
+   *
+   * @example
+   * GET /api/v1/contract/orgs?page=1&limit=10
+   */
+  fastify.get<{ Querystring: { page?: string; limit?: string } }>(
+    "/orgs",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          properties: {
+            page: { type: "string", default: "1" },
+            limit: { type: "string", default: "10" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const page = parseInt(request.query.page || "1", 10);
+      const limit = parseInt(request.query.limit || "10", 10);
+      const result = await contractController.getOrganizations(page, limit);
+      return reply.send(result);
+    }
+  );
+
+  /**
+   * POST /orgs
+   * Registers a new organization on-chain and indexes it in the local database.
+   */
+  fastify.post<{ Body: z.infer<typeof RegisterOrgBody> }>(
+    "/orgs",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["id", "name", "admin", "signerSecret"],
+          properties: {
+            id: { type: "string", minLength: 1, maxLength: 9 },
+            name: { type: "string", minLength: 1, maxLength: 64 },
+            admin: { type: "string" },
+            signerSecret: { type: "string" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const parsed = RegisterOrgBody.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "Invalid request body",
+          details: parsed.error.flatten().fieldErrors,
+        });
+      }
+
+      const { id, name, admin, signerSecret } = parsed.data;
+      const result = await contractController.registerOrganization(
+        id,
+        name,
+        admin,
+        signerSecret
+      );
+      return reply.status(201).send(result);
+    }
+  );
+
   /**
    * GET /orgs/:orgId
    * Returns the details of a registered organization.

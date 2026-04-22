@@ -157,6 +157,31 @@ export class StellarService {
   }
 
   /**
+   * Register a new organization on the contract.
+   * 
+   * @param id           — The organization's Symbol ID (max 9 chars).
+   * @param name         — The display name of the organization.
+   * @param admin        — The admin's Stellar public key.
+   * @param signerSecret — The admin's Stellar secret key.
+   */
+  async registerOrg(
+    id: string,
+    name: string,
+    admin: string,
+    signerSecret: string
+  ): Promise<ContractCallResult> {
+    return this._submitContractCall(
+      "register_org",
+      [
+        nativeToScVal(id, { type: "symbol" }),
+        nativeToScVal(name, { type: "string" }),
+        nativeToScVal(admin, { type: "address" }),
+      ],
+      signerSecret
+    );
+  }
+
+  /**
    * Fund an organization's budget.
    *
    * @param orgId           — The organization's Symbol ID.
