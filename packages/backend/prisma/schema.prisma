@@ -19,3 +19,14 @@ model Organization {
 
   @@index([createdAt])
 }
+
+model Transaction {
+  id            String   @id @default(cuid())
+  walletAddress String
+  volumeUSD     Decimal
+  createdAt     DateTime @default(now())
+  type          String   // e.g., "PURCHASE", "MINT"
+
+  @@index([createdAt])
+  @@index([walletAddress])
+}
