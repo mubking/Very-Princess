@@ -32,7 +32,7 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: {
     template: "%s | very-princess",
-    default: "very-princess — Stellar Payout Registry",
+    default: "very-princess – Stellar Payout Registry",
   },
   description:
     "A decentralised multi-organization maintenance payout registry built on Stellar Soroban. Transparently track and claim contributor payouts on-chain.",
@@ -40,10 +40,40 @@ export const metadata: Metadata = {
   openGraph: {
     siteName: "very-princess",
     type: "website",
+    title: "very-princess – Stellar Payout Registry",
+    description:
+      "Transparently track and claim contributor payouts on-chain via Stellar Soroban.",
+    url: "https://very-princess.xyz",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "very-princess – Stellar Payout Registry",
+    description:
+      "Transparently track and claim contributor payouts on-chain via Stellar Soroban.",
   },
 };
 
 // ── Layout ────────────────────────────────────────────────────────────────────
+
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Dashboard",
+  openGraph: {
+    title: "very-princess – Organization Dashboard",
+    description: "View organization details and claim contributor payouts on-chain.",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "very-princess – Organization Dashboard",
+    description: "View organization details and claim contributor payouts on-chain.",
+  },
+};
+
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  return <>{children}</>;
+}
 
 export default function RootLayout({
   children,

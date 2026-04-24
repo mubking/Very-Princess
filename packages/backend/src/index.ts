@@ -24,7 +24,7 @@ import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import { SERVER_HOST, SERVER_PORT } from "./config/env.js";
 import { contractRoutes } from "./routes/contract.js";
-import { analyticsRoutes } from "./routes/analytics.js";
+import { errorHandler } from "./plugins/errorHandler.js";
 
 // ─── Server Setup ─────────────────────────────────────────────────────────────
 
@@ -54,6 +54,8 @@ await server.register(cors, {
       : true, // allow all origins in development
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
 });
+
+await server.register(errorHandler);
 
 // ─── Route Registration ───────────────────────────────────────────────────────
 
