@@ -167,6 +167,35 @@ export class StellarService {
     }
   }
 
+  /**
+   * Get the current state of the contract for indexing purposes.
+   * This method fetches key contract data that should be indexed.
+   *
+   * @param contractId - The contract ID to query
+   * @returns Contract state data for indexing
+   */
+  async getContractState(contractId: string): Promise<Record<string, unknown>> {
+    try {
+      // Get the ledger info to establish baseline
+      const ledger = await this.rpcServer.getLatestLedger();
+      
+      // In a real implementation, you would query specific contract storage keys
+      // For now, we'll return basic contract information
+      const contractState = {
+        contractId,
+        ledgerSequence: ledger.sequence,
+        timestamp: new Date().toISOString(), // Use current time since ledger doesn't have timestamp
+        // Add more contract-specific data as needed
+        // This could include total organizations, total budgets, etc.
+      };
+
+      return contractState;
+    } catch (error) {
+      console.error('Error fetching contract state:', error);
+      throw error;
+    }
+  }
+
   // ── Soroban Write Operations ──────────────────────────────────────────────
 
   /**

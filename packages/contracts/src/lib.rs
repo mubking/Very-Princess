@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, Address, Env, String, Symbol, Vec,
+    contract, contractimpl, contracttype, symbol_short, token, Address, Env, String, Symbol, Vec, BytesN,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -31,6 +31,13 @@ pub struct MaintainerPayout {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProtocolState {
+    Active,
+    Paused,
+}
+
+#[contracttype]
 pub enum DataKey {
     /// The global Stellar Asset Contract address configured during initialization.
     Token,
@@ -41,6 +48,10 @@ pub enum DataKey {
     MaintainerBalance(Address),
     /// Total budget currently held by this org (in stroops).
     OrgBudget(Symbol),
+    /// Protocol admin address for contract upgrades and emergency functions.
+    ProtocolAdmin,
+    /// Current protocol state (Active or Paused).
+    ProtocolState,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,13 +67,20 @@ impl PayoutRegistry {
     // Initialization
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// Initialize the contract with a single global token (e.g. USDC or XLM).
+    /// Initialize the contract with a single global token (e.g. USDC or XLM) and set the protocol admin.
     /// This can only be called once.
-    pub fn init(env: Env, token: Address) {
+    pub fn init(env: Env, token: Address, protocol_admin: Address) {
         if env.storage().persistent().has(&DataKey::Token) {
             panic!("already initialized");
         }
         env.storage().persistent().set(&DataKey::Token, &token);
+        env.storage().persistent().set(&DataKey::ProtocolAdmin, &protocol_admin);
+        env.storage().persistent().set(&DataKey::ProtocolState, &ProtocolState::Active);
+        
+        env.events().publish(
+            (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "Initialized")),
+            (token, protocol_admin),
+        );
     }
 
     /// Retrieve the global token address.
@@ -74,6 +92,40 @@ impl PayoutRegistry {
             .persistent()
             .get(&DataKey::Token)
             .expect("contract not initialized")
+    }
+
+    /// Retrieve the protocol admin address.
+    ///
+    /// # Panics
+    /// If the contract has not been initialized.
+    pub fn get_protocol_admin(env: Env) -> Address {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ProtocolAdmin)
+            .expect("contract not initialized")
+    }
+
+    /// Retrieve the current protocol state.
+    ///
+    /// # Panics
+    /// If the contract has not been initialized.
+    pub fn get_protocol_state(env: Env) -> ProtocolState {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ProtocolState)
+            .expect("contract not initialized")
+    }
+
+    /// Assert that the protocol is currently active.
+    /// 
+    /// # Panics
+    /// If the protocol is paused.
+    fn assert_active(env: &Env) {
+        let state = Self::get_protocol_state(env.clone());
+        match state {
+            ProtocolState::Active => {}, // Continue normally
+            ProtocolState::Paused => panic!("protocol is paused"),
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -127,6 +179,7 @@ impl PayoutRegistry {
     /// Anyone can deposit tokens into the registry earmarked for an organization.
     /// The tokens are transferred from `from` to the contract's address.
     pub fn fund_org(env: Env, org_id: Symbol, from: Address, amount: i128) {
+        Self::assert_active(&env);
         from.require_auth();
 
         if amount <= 0 {
@@ -231,6 +284,7 @@ impl PayoutRegistry {
     // ─────────────────────────────────────────────────────────────────────────
 
     pub fn allocate_payout(env: Env, org_id: Symbol, maintainer: Address, amount: i128, unlock_timestamp: u64) {
+        Self::assert_active(&env);
         let admin: Address = env
             .storage()
             .persistent()
@@ -289,6 +343,7 @@ impl PayoutRegistry {
     }
 
     pub fn claim_payout(env: Env, maintainer: Address) -> i128 {
+        Self::assert_active(&env);
         maintainer.require_auth();
 
         let balance_key = DataKey::MaintainerBalance(maintainer.clone());
@@ -316,10 +371,106 @@ impl PayoutRegistry {
 
         env.events().publish(
     (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "PayoutClaimed")),
-    (maintainer, claimable),
+    (maintainer, payout.amount),
 );
 
         payout.amount
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Protocol Pause/Unpause
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Pause the protocol. Only the protocol admin can call this.
+    /// 
+    /// When paused, all fund_org, allocate_payout, and claim_payout operations
+    /// will be blocked with a "protocol is paused" error.
+    /// 
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `protocol_admin` - The address of the protocol admin (must match stored admin)
+    pub fn pause_protocol(env: Env, protocol_admin: Address) {
+        // Verify the caller is the protocol admin
+        let stored_admin = Self::get_protocol_admin(env.clone());
+        if stored_admin != protocol_admin {
+            panic!("unauthorized: not protocol admin");
+        }
+        
+        // Require authentication from the protocol admin
+        protocol_admin.require_auth();
+        
+        // Update the protocol state to paused
+        env.storage().persistent().set(&DataKey::ProtocolState, &ProtocolState::Paused);
+        
+        // Emit pause event
+        env.events().publish(
+            (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "ProtocolPaused")),
+            protocol_admin,
+        );
+    }
+
+    /// Unpause the protocol. Only the protocol admin can call this.
+    /// 
+    /// When unpaused, normal operations resume.
+    /// 
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `protocol_admin` - The address of the protocol admin (must match stored admin)
+    pub fn unpause_protocol(env: Env, protocol_admin: Address) {
+        // Verify the caller is the protocol admin
+        let stored_admin = Self::get_protocol_admin(env.clone());
+        if stored_admin != protocol_admin {
+            panic!("unauthorized: not protocol admin");
+        }
+        
+        // Require authentication from the protocol admin
+        protocol_admin.require_auth();
+        
+        // Update the protocol state to active
+        env.storage().persistent().set(&DataKey::ProtocolState, &ProtocolState::Active);
+        
+        // Emit unpause event
+        env.events().publish(
+            (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "ProtocolUnpaused")),
+            protocol_admin,
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Contract Upgradeability
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Upgrade the contract to a new WASM binary.
+    /// 
+    /// This function can only be called by the protocol admin and allows for
+    /// upgrading the contract code while preserving all contract state.
+    /// 
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `protocol_admin` - The address of the protocol admin (must match stored admin)
+    /// * `new_wasm_hash` - The 32-byte hash of the new WASM binary
+    /// 
+    /// # Panics
+    /// * If the caller is not the protocol admin
+    /// * If the WASM hash is invalid
+    pub fn upgrade(env: Env, protocol_admin: Address, new_wasm_hash: BytesN<32>) {
+        // Verify the caller is the protocol admin
+        let stored_admin = Self::get_protocol_admin(env.clone());
+        if stored_admin != protocol_admin {
+            panic!("unauthorized: not protocol admin");
+        }
+        
+        // Require authentication from the protocol admin
+        protocol_admin.require_auth();
+        
+        // Perform the upgrade
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        
+        // Emit upgrade event
+        env.events().publish(
+            (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "ContractUpgraded")),
+            (protocol_admin, new_wasm_hash),
+        );
     }
 }
 
@@ -356,8 +507,11 @@ mod tests {
         let contract_id = env.register_contract(None, PayoutRegistry);
         let client = PayoutRegistryClient::new(&env, &contract_id);
 
-        // Init Registry
-        client.init(&token_contract_id.address());
+        // Create protocol admin for initialization
+        let protocol_admin = Address::generate(&env);
+        
+        // Init Registry with protocol admin
+        client.init(&token_contract_id.address(), &protocol_admin);
 
         Setup {
             env,
@@ -439,6 +593,112 @@ mod tests {
 
         // Budget is zero, so this panics
         client.allocate_payout(&org_sym, &maintainer, &5_000_000_i128, &0);
+    }
+
+    #[test]
+    fn test_contract_upgrade() {
+        let Setup { env, client, .. } = setup();
+        
+        // Get the protocol admin (this should work since we set it in setup)
+        let protocol_admin = client.get_protocol_admin();
+        
+        // Create a mock new WASM hash (32 bytes of zeros for testing)
+        let new_wasm_hash = BytesN::from_array(&env, &[0; 32]);
+        
+        // This should succeed since we're using the protocol admin
+        client.upgrade(&protocol_admin, &new_wasm_hash);
+        
+        // Verify the upgrade event was emitted (in a real test you'd check events)
+        // For now, just verify the function doesn't panic
+    }
+
+    #[test]
+    #[should_panic(expected = "unauthorized: not protocol admin")]
+    fn test_upgrade_unauthorized() {
+        let Setup { env, client, .. } = setup();
+        
+        // Try to upgrade with a non-admin address
+        let unauthorized_address = Address::generate(&env);
+        let new_wasm_hash = BytesN::from_array(&env, &[0; 32]);
+        
+        // This should panic since the address is not the protocol admin
+        client.upgrade(&unauthorized_address, &new_wasm_hash);
+    }
+
+    #[test]
+    fn test_pause_unpause_protocol() {
+        let Setup { env, client, .. } = setup();
+        
+        // Get the protocol admin
+        let protocol_admin = client.get_protocol_admin();
+        
+        // Initially, protocol should be active
+        assert!(matches!(client.get_protocol_state(), ProtocolState::Active));
+        
+        // Pause the protocol
+        client.pause_protocol(&protocol_admin);
+        
+        // Verify protocol is now paused
+        assert!(matches!(client.get_protocol_state(), ProtocolState::Paused));
+        
+        // Unpause the protocol
+        client.unpause_protocol(&protocol_admin);
+        
+        // Verify protocol is active again
+        assert!(matches!(client.get_protocol_state(), ProtocolState::Active));
+    }
+
+    #[test]
+    #[should_panic(expected = "unauthorized: not protocol admin")]
+    fn test_pause_unauthorized() {
+        let Setup { env, client, .. } = setup();
+        
+        // Try to pause with a non-admin address
+        let unauthorized_address = Address::generate(&env);
+        
+        // This should panic since the address is not the protocol admin
+        client.pause_protocol(&unauthorized_address);
+    }
+
+    #[test]
+    #[should_panic(expected = "protocol is paused")]
+    fn test_operations_when_paused() {
+        let Setup { env, client, token, .. } = setup();
+        let org_sym = symbol_short!("myorg");
+        let admin = register_test_org(&env, &client, org_sym.clone());
+        
+        // Get the protocol admin and pause the protocol
+        let protocol_admin = client.get_protocol_admin();
+        client.pause_protocol(&protocol_admin);
+        
+        // Try to fund org - should panic
+        let donor = Address::generate(&env);
+        let token_client = token::Client::new(&env, &token.address);
+        token.mint(&donor, &100_000_000);
+        client.fund_org(&org_sym, &donor, &50_000_000);
+    }
+
+    #[test]
+    fn test_operations_resume_after_unpause() {
+        let Setup { env, client, token, .. } = setup();
+        let org_sym = symbol_short!("myorg");
+        let admin = register_test_org(&env, &client, org_sym.clone());
+        
+        // Get the protocol admin and pause the protocol
+        let protocol_admin = client.get_protocol_admin();
+        client.pause_protocol(&protocol_admin);
+        
+        // Unpause the protocol
+        client.unpause_protocol(&protocol_admin);
+        
+        // Now operations should work again
+        let donor = Address::generate(&env);
+        let token_client = token::Client::new(&env, &token.address);
+        token.mint(&donor, &100_000_000);
+        client.fund_org(&org_sym, &donor, &50_000_000);
+        
+        // Verify the funding worked
+        assert_eq!(client.get_org_budget(&org_sym), 50_000_000);
     }
 
     #[test]

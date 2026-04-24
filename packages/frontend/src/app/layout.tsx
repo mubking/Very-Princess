@@ -11,13 +11,10 @@
 
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
+import { Toaster } from "sonner";
 import "./globals.css";
 
 // ── Font Loading ──────────────────────────────────────────────────────────────
-
-type Props = {
-  params: { id: string };
-};
 
 const inter = Inter({
   subsets: ["latin"],
@@ -57,47 +54,6 @@ export const metadata: Metadata = {
   },
 };
 
-// ── Layout ────────────────────────────────────────────────────────────────────
-
-import type { Metadata } from "next";
-
-export const metadata: Metadata = {
-  title: "Dashboard",
-  openGraph: {
-    title: "very-princess – Organization Dashboard",
-    description: "View organization details and claim contributor payouts on-chain.",
-    type: "website",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "very-princess – Organization Dashboard",
-    description: "View organization details and claim contributor payouts on-chain.",
-  },
-};
-
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  // replace with your actual data fetching
-  const org = await fetchOrg(params.id);
-
-  return {
-    title: org.name,
-    description: `${org.name} — Budget: ${org.budget}`,
-    openGraph: {
-      title: org.name,
-      description: `${org.name} — Budget: ${org.budget}`,
-    },
-    twitter: {
-      card: "summary",
-      title: org.name,
-      description: `${org.name} — Budget: ${org.budget}`,
-    },
-  };
-}
-
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  return <>{children}</>;
-}
-
 export default function RootLayout({
   children,
 }: {
@@ -113,6 +69,23 @@ export default function RootLayout({
         />
         {/* Page content */}
         <div className="relative">{children}</div>
+        
+        {/* Toast notifications */}
+        <Toaster
+          position="top-right"
+          expand={false}
+          richColors
+          closeButton
+          theme="dark"
+          toastOptions={{
+            style: {
+              background: 'rgba(255, 255, 255, 0.1)',
+              backdropFilter: 'blur(12px)',
+              border: '1px solid rgba(255, 255, 255, 0.2)',
+              color: 'white',
+            },
+          }}
+        />
       </body>
     </html>
   );
