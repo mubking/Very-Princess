@@ -109,8 +109,10 @@ impl PayoutRegistry {
             .persistent()
             .set(&DataKey::OrgBudget(id.clone()), &0_i128);
 
-        env.events()
-            .publish((symbol_short!("registry"), symbol_short!("org_added")), id);
+        env.events().publish(
+    (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "OrgRegistered")),
+    id,
+);
     }
 
     pub fn get_org(env: Env, id: Symbol) -> Organization {
@@ -151,9 +153,9 @@ impl PayoutRegistry {
             .set(&budget_key, &(current_budget + amount));
 
         env.events().publish(
-            (symbol_short!("registry"), symbol_short!("funded")),
-            (org_id, from, amount),
-        );
+    (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "OrgFunded")),
+    (org_id, from, amount),
+);
     }
 
     pub fn get_org_budget(env: Env, id: Symbol) -> i128 {
@@ -203,9 +205,9 @@ impl PayoutRegistry {
             .set(&maintainer_list_key, &maintainers);
 
         env.events().publish(
-            (symbol_short!("registry"), symbol_short!("mnt_added")),
-            (org_id, maintainer),
-        );
+    (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "MaintainerAdded")),
+    (org_id, maintainer),
+);
     }
 
     pub fn get_maintainer(env: Env, address: Address) -> Maintainer {
@@ -273,9 +275,9 @@ impl PayoutRegistry {
         env.storage().persistent().set(&balance_key, &current_payout);
 
         env.events().publish(
-            (symbol_short!("payout"), symbol_short!("allocated")),
-            (org_id, maintainer, amount),
-        );
+    (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "PayoutAllocated")),
+    (org_id, maintainer, amount),
+);
     }
 
     pub fn get_claimable_balance(env: Env, maintainer: Address) -> i128 {
@@ -313,9 +315,9 @@ impl PayoutRegistry {
         token_client.transfer(&env.current_contract_address(), &maintainer, &payout.amount);
 
         env.events().publish(
-            (symbol_short!("payout"), symbol_short!("claimed")),
-            (maintainer, payout.amount),
-        );
+    (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "PayoutClaimed")),
+    (maintainer, claimable),
+);
 
         payout.amount
     }

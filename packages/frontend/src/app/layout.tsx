@@ -15,6 +15,10 @@ import "./globals.css";
 
 // ── Font Loading ──────────────────────────────────────────────────────────────
 
+type Props = {
+  params: { id: string };
+};
+
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-inter",
@@ -70,6 +74,25 @@ export const metadata: Metadata = {
     description: "View organization details and claim contributor payouts on-chain.",
   },
 };
+
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  // replace with your actual data fetching
+  const org = await fetchOrg(params.id);
+
+  return {
+    title: org.name,
+    description: `${org.name} — Budget: ${org.budget}`,
+    openGraph: {
+      title: org.name,
+      description: `${org.name} — Budget: ${org.budget}`,
+    },
+    twitter: {
+      card: "summary",
+      title: org.name,
+      description: `${org.name} — Budget: ${org.budget}`,
+    },
+  };
+}
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return <>{children}</>;

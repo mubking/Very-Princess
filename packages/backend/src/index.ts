@@ -25,6 +25,7 @@ import helmet from "@fastify/helmet";
 import { SERVER_HOST, SERVER_PORT } from "./config/env.js";
 import { contractRoutes } from "./routes/contract.js";
 import { errorHandler } from "./plugins/errorHandler.js";
+import { statsRoutes } from "./routes/stats.js";
 
 // ─── Server Setup ─────────────────────────────────────────────────────────────
 
@@ -63,8 +64,7 @@ await server.register(errorHandler);
 // The v1 prefix supports future API versioning without breaking changes.
 await server.register(contractRoutes, { prefix: "/api/v1/contract" });
 
-// Analytics routes (leaderboard, etc.)
-await server.register(analyticsRoutes, { prefix: "/api/v1/analytics" });
+await server.register(statsRoutes, { prefix: "/api/stats" });
 
 // Health check — used by CI, load balancers, and monitoring.
 server.get("/health", async () => ({
