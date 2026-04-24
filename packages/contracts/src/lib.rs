@@ -24,6 +24,13 @@ pub struct Maintainer {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaintainerPayout {
+    pub amount: i128,
+    pub unlock_timestamp: u64,
+}
+
+#[contracttype]
 pub enum DataKey {
     /// The global Stellar Asset Contract address configured during initialization.
     Token,
@@ -102,8 +109,10 @@ impl PayoutRegistry {
             .persistent()
             .set(&DataKey::OrgBudget(id.clone()), &0_i128);
 
-        env.events()
-            .publish((symbol_short!("registry"), symbol_short!("org_added")), id);
+        env.events().publish(
+    (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "OrgRegistered")),
+    id,
+);
     }
 
     pub fn get_org(env: Env, id: Symbol) -> Organization {
@@ -144,9 +153,9 @@ impl PayoutRegistry {
             .set(&budget_key, &(current_budget + amount));
 
         env.events().publish(
-            (symbol_short!("registry"), symbol_short!("funded")),
-            (org_id, from, amount),
-        );
+    (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "OrgFunded")),
+    (org_id, from, amount),
+);
     }
 
     pub fn get_org_budget(env: Env, id: Symbol) -> i128 {
@@ -182,7 +191,7 @@ impl PayoutRegistry {
 
         env.storage()
             .persistent()
-            .set(&DataKey::MaintainerBalance(maintainer.clone()), &0_i128);
+            .set(&DataKey::MaintainerBalance(maintainer.clone()), &MaintainerPayout { amount: 0, unlock_timestamp: 0 });
 
         let maintainer_list_key = DataKey::OrgMaintainers(org_id.clone());
         let mut maintainers: Vec<Address> = env
@@ -196,9 +205,9 @@ impl PayoutRegistry {
             .set(&maintainer_list_key, &maintainers);
 
         env.events().publish(
-            (symbol_short!("registry"), symbol_short!("mnt_added")),
-            (org_id, maintainer),
-        );
+    (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "MaintainerAdded")),
+    (org_id, maintainer),
+);
     }
 
     pub fn get_maintainer(env: Env, address: Address) -> Maintainer {
@@ -221,7 +230,7 @@ impl PayoutRegistry {
     // Payout Allocation & Claiming
     // ─────────────────────────────────────────────────────────────────────────
 
-    pub fn allocate_payout(env: Env, org_id: Symbol, maintainer: Address, amount: i128) {
+    pub fn allocate_payout(env: Env, org_id: Symbol, maintainer: Address, amount: i128, unlock_timestamp: u64) {
         let admin: Address = env
             .storage()
             .persistent()
@@ -256,55 +265,61 @@ impl PayoutRegistry {
 
         // Accumulate the claimable balance.
         let balance_key = DataKey::MaintainerBalance(maintainer.clone());
-        let current_balance: i128 = env
+        let mut current_payout: MaintainerPayout = env
             .storage()
             .persistent()
             .get(&balance_key)
-            .unwrap_or(0_i128);
-        let new_balance = current_balance + amount;
-        env.storage().persistent().set(&balance_key, &new_balance);
+            .unwrap_or(MaintainerPayout { amount: 0, unlock_timestamp: 0 });
+        current_payout.amount += amount;
+        current_payout.unlock_timestamp = unlock_timestamp;
+        env.storage().persistent().set(&balance_key, &current_payout);
 
         env.events().publish(
-            (symbol_short!("payout"), symbol_short!("allocated")),
-            (org_id, maintainer, amount),
-        );
+    (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "PayoutAllocated")),
+    (org_id, maintainer, amount),
+);
     }
 
     pub fn get_claimable_balance(env: Env, maintainer: Address) -> i128 {
-        env.storage()
+        let payout: MaintainerPayout = env.storage()
             .persistent()
             .get(&DataKey::MaintainerBalance(maintainer))
-            .unwrap_or(0_i128)
+            .unwrap_or(MaintainerPayout { amount: 0, unlock_timestamp: 0 });
+        payout.amount
     }
 
     pub fn claim_payout(env: Env, maintainer: Address) -> i128 {
         maintainer.require_auth();
 
         let balance_key = DataKey::MaintainerBalance(maintainer.clone());
-        let claimable: i128 = env
+        let payout: MaintainerPayout = env
             .storage()
             .persistent()
             .get(&balance_key)
-            .unwrap_or(0_i128);
+            .unwrap_or(MaintainerPayout { amount: 0, unlock_timestamp: 0 });
 
-        if claimable == 0 {
+        if payout.amount == 0 {
             panic!("no claimable balance");
         }
 
+        if env.ledger().timestamp() < payout.unlock_timestamp {
+            panic!("payout is still locked");
+        }
+
         // Reset the balance BEFORE the transfer (Checks-Effects-Interactions)
-        env.storage().persistent().set(&balance_key, &0_i128);
+        env.storage().persistent().set(&balance_key, &MaintainerPayout { amount: 0, unlock_timestamp: 0 });
 
         // Perform token transfer to the maintainer
         let token = Self::get_token(env.clone());
         let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&env.current_contract_address(), &maintainer, &claimable);
+        token_client.transfer(&env.current_contract_address(), &maintainer, &payout.amount);
 
         env.events().publish(
-            (symbol_short!("payout"), symbol_short!("claimed")),
-            (maintainer, claimable),
-        );
+    (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "PayoutClaimed")),
+    (maintainer, claimable),
+);
 
-        claimable
+        payout.amount
     }
 }
 
@@ -423,7 +438,7 @@ mod tests {
         client.add_maintainer(&org_sym, &maintainer);
 
         // Budget is zero, so this panics
-        client.allocate_payout(&org_sym, &maintainer, &5_000_000_i128);
+        client.allocate_payout(&org_sym, &maintainer, &5_000_000_i128, &0);
     }
 
     #[test]
@@ -444,7 +459,7 @@ mod tests {
         client.fund_org(&org_sym, &donor, &20_000_000);
 
         // Allocate
-        client.allocate_payout(&org_sym, &maintainer, &5_000_000_i128);
+        client.allocate_payout(&org_sym, &maintainer, &5_000_000_i128, &0);
         assert_eq!(client.get_claimable_balance(&maintainer), 5_000_000);
         assert_eq!(client.get_org_budget(&org_sym), 15_000_000); // 20M - 5M
 
@@ -457,5 +472,46 @@ mod tests {
         assert_eq!(client.get_claimable_balance(&maintainer), 0);
         assert_eq!(token_client.balance(&maintainer), 5_000_000);
         assert_eq!(token_client.balance(&client.address), 15_000_000); // Only org budget left
+    }
+
+    #[test]
+    #[should_panic(expected = "payout is still locked")]
+    fn test_time_bound_payout_locked() {
+        let Setup { env, client, token, .. } = setup();
+        let org_sym = symbol_short!("myorg");
+        register_test_org(&env, &client, org_sym.clone());
+
+        let maintainer = Address::generate(&env);
+        client.add_maintainer(&org_sym, &maintainer);
+
+        let donor = Address::generate(&env);
+        token.mint(&donor, &20_000_000);
+        client.fund_org(&org_sym, &donor, &20_000_000);
+
+        env.ledger().with_mut(|li| li.timestamp = 100);
+        client.allocate_payout(&org_sym, &maintainer, &5_000_000_i128, &200);
+
+        client.claim_payout(&maintainer);
+    }
+
+    #[test]
+    fn test_time_bound_payout_unlocked() {
+        let Setup { env, client, token, .. } = setup();
+        let org_sym = symbol_short!("myorg");
+        register_test_org(&env, &client, org_sym.clone());
+
+        let maintainer = Address::generate(&env);
+        client.add_maintainer(&org_sym, &maintainer);
+
+        let donor = Address::generate(&env);
+        token.mint(&donor, &20_000_000);
+        client.fund_org(&org_sym, &donor, &20_000_000);
+
+        env.ledger().with_mut(|li| li.timestamp = 100);
+        client.allocate_payout(&org_sym, &maintainer, &5_000_000_i128, &200);
+
+        env.ledger().with_mut(|li| li.timestamp = 201);
+        let claimed = client.claim_payout(&maintainer);
+        assert_eq!(claimed, 5_000_000);
     }
 }

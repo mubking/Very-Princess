@@ -72,11 +72,15 @@ await server.register(cors, {
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
 });
 
+await server.register(errorHandler);
+
 // ─── Route Registration ───────────────────────────────────────────────────────
 
 // All contract-related routes are mounted under /api/v1/contract.
 // The v1 prefix supports future API versioning without breaking changes.
 await server.register(contractRoutes, { prefix: "/api/v1/contract" });
+
+await server.register(statsRoutes, { prefix: "/api/stats" });
 
 // Health check — used by CI, load balancers, and monitoring.
 server.get("/health", async () => ({

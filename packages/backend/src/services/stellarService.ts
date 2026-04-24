@@ -143,6 +143,30 @@ export class StellarService {
     return BigInt(scValToNative(result as xdr.ScVal) as number);
   }
 
+  /**
+   * Get all pending payouts for a maintainer across organizations.
+   *
+   * @param maintainerAddress - Stellar public key
+   * @returns Array of pending payouts
+   */
+  async getMaintainerPayouts(maintainerAddress: string): Promise<Array<{ orgId: string; amount: number }>> {
+    try {
+      const maintainerResult = await this._simulateContractCall("get_maintainer", [
+        nativeToScVal(maintainerAddress, { type: "address" }),
+      ]);
+      const maintainer = scValToNative(maintainerResult as xdr.ScVal) as { org_id: string };
+
+      const amount = await this.readClaimableBalance(maintainerAddress);
+
+      if (amount > 0n) {
+        return [{ orgId: maintainer.org_id, amount: Number(amount) }];
+      }
+      return [];
+    } catch (error) {
+      return [];
+    }
+  }
+
   // ── Soroban Write Operations ──────────────────────────────────────────────
 
   /**
@@ -152,6 +176,31 @@ export class StellarService {
     return this._submitContractCall(
       "init",
       [nativeToScVal(tokenAddress, { type: "address" })],
+      signerSecret
+    );
+  }
+
+  /**
+   * Register a new organization on the contract.
+   * 
+   * @param id           — The organization's Symbol ID (max 9 chars).
+   * @param name         — The display name of the organization.
+   * @param admin        — The admin's Stellar public key.
+   * @param signerSecret — The admin's Stellar secret key.
+   */
+  async registerOrg(
+    id: string,
+    name: string,
+    admin: string,
+    signerSecret: string
+  ): Promise<ContractCallResult> {
+    return this._submitContractCall(
+      "register_org",
+      [
+        nativeToScVal(id, { type: "symbol" }),
+        nativeToScVal(name, { type: "string" }),
+        nativeToScVal(admin, { type: "address" }),
+      ],
       signerSecret
     );
   }
@@ -193,12 +242,14 @@ export class StellarService {
    * @param maintainerAddress — The maintainer's Stellar address.
    * @param amountStroops   — Amount in stroops (bigint).
    * @param signerSecret    — The admin's Stellar secret key (S...).
+   * @param unlockTimestamp — Optional unlock timestamp.
    */
   async allocatePayout(
     orgId: string,
     maintainerAddress: string,
     amountStroops: bigint,
-    signerSecret: string
+    signerSecret: string,
+    unlockTimestamp: number = 0
   ): Promise<ContractCallResult> {
     return this._submitContractCall(
       "allocate_payout",
@@ -206,6 +257,7 @@ export class StellarService {
         nativeToScVal(orgId, { type: "symbol" }),
         nativeToScVal(maintainerAddress, { type: "address" }),
         nativeToScVal(amountStroops, { type: "i128" }),
+        nativeToScVal(unlockTimestamp, { type: "u64" }),
       ],
       signerSecret
     );

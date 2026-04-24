@@ -21,8 +21,18 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { contractController } from "../controllers/contractController.js";
+import { stellarService } from "../services/stellarService.js";
+import { Keypair } from "@stellar/stellar-sdk";
 
 // ─── Validation Schemas ──────────────────────────────────────────────────────
+
+/** Validation for the POST /orgs registration request body. */
+const RegisterOrgBody = z.object({
+  id: z.string().min(1).max(9),
+  name: z.string().min(1).max(64),
+  admin: z.string().startsWith("G").length(56),
+  signerSecret: z.string().startsWith("S").length(56),
+});
 
 /** Validation for the POST /orgs/:orgId/fund request body. */
 const FundOrgBody = z.object({
@@ -49,9 +59,87 @@ const AllocatePayoutBody = z.object({
   signerSecret: z.string().startsWith("S").length(56),
 });
 
+/** Validation for the POST /auth/verify request body. */
+const VerifyAuthBody = z.object({
+  publicKey: z.string().startsWith("G").length(56),
+  signature: z.string(),
+  originalMessage: z.string(),
+});
+
 // ─── Route Plugin ────────────────────────────────────────────────────────────
 
+// Export mock cache for nonce verification
+export const nonceCache = new Map<string, { nonce: string; expiresAt: number }>();
+
 export const contractRoutes: FastifyPluginAsync = async (fastify) => {
+  /**
+   * GET /orgs
+   * Returns a paginated list of registered organizations.
+   *
+   * @example
+   * GET /api/v1/contract/orgs?page=1&limit=10
+   */
+  fastify.get<{ Querystring: { page?: string; limit?: string } }>(
+    "/orgs",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          properties: {
+            page: { type: "string", default: "1" },
+            limit: { type: "string", default: "10" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const page = parseInt(request.query.page || "1", 10);
+      const limit = parseInt(request.query.limit || "10", 10);
+      const result = await contractController.getOrganizations(page, limit);
+      return reply.send(result);
+    }
+  );
+
+  /**
+   * POST /orgs
+   * Registers a new organization on-chain and indexes it in the local database.
+   */
+  fastify.post<{ Body: z.infer<typeof RegisterOrgBody> }>(
+    "/orgs",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["id", "name", "admin", "signerSecret"],
+          properties: {
+            id: { type: "string", minLength: 1, maxLength: 9 },
+            name: { type: "string", minLength: 1, maxLength: 64 },
+            admin: { type: "string" },
+            signerSecret: { type: "string" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const parsed = RegisterOrgBody.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "Invalid request body",
+          details: parsed.error.flatten().fieldErrors,
+        });
+      }
+
+      const { id, name, admin, signerSecret } = parsed.data;
+      const result = await contractController.registerOrganization(
+        id,
+        name,
+        admin,
+        signerSecret
+      );
+      return reply.status(201).send(result);
+    }
+  );
+
   /**
    * GET /orgs/:orgId
    * Returns the details of a registered organization.
@@ -283,6 +371,113 @@ fastify.post(
         signerSecret
       );
       return reply.status(201).send(result);
+    }
+  );
+
+  /**
+   * GET /maintainer/:address
+   * Return an array of pending payouts: [{ orgId: "...", amount: 500 }]
+   */
+  fastify.get<{ Params: { address: string } }>(
+    "/maintainer/:address",
+    {
+      schema: {
+        params: {
+          type: "object",
+          properties: {
+            address: { type: "string", description: "Stellar public key (G...)" },
+          },
+          required: ["address"],
+        },
+      },
+    },
+    async (request, reply) => {
+      const { address } = request.params;
+      const payouts = await stellarService.getMaintainerPayouts(address);
+      return reply.send(payouts);
+    }
+  );
+
+  /**
+   * POST /auth/nonce
+   * Generate an authentication nonce.
+   */
+  fastify.post(
+    "/auth/nonce",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["publicKey"],
+          properties: { publicKey: { type: "string" } }
+        }
+      }
+    },
+    async (request, reply) => {
+      const { publicKey } = request.body as { publicKey: string };
+      const nonce = Math.random().toString(36).substring(2);
+      nonceCache.set(publicKey, { nonce, expiresAt: Date.now() + 1000 * 60 * 5 });
+      return reply.send({ nonce });
+    }
+  );
+
+  /**
+   * POST /auth/verify
+   * Verify wallet signature for authentication.
+   */
+  fastify.post(
+    "/auth/verify",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["publicKey", "signature", "originalMessage"],
+          properties: {
+            publicKey: { type: "string" },
+            signature: { type: "string" },
+            originalMessage: { type: "string" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const parsed = VerifyAuthBody.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: "Invalid request body",
+          details: parsed.error.flatten().fieldErrors,
+        });
+      }
+
+      const { publicKey, signature, originalMessage } = parsed.data;
+
+      const cached = nonceCache.get(publicKey);
+      if (!cached) {
+        return reply.status(401).send({ error: "No pending authentication request found." });
+      }
+
+      if (Date.now() > cached.expiresAt) {
+        nonceCache.delete(publicKey);
+        return reply.status(401).send({ error: "Authentication request expired." });
+      }
+
+      try {
+        const keypair = Keypair.fromPublicKey(publicKey);
+        const isValid = keypair.verify(
+          Buffer.from(originalMessage),
+          Buffer.from(signature, "base64")
+        );
+
+        if (!isValid) {
+          return reply.status(401).send({ error: "Invalid signature." });
+        }
+
+        nonceCache.delete(publicKey);
+
+        return reply.send({ success: true, message: "Authentication verified." });
+      } catch (err) {
+        return reply.status(401).send({ error: "Signature verification failed." });
+      }
     }
   );
 };

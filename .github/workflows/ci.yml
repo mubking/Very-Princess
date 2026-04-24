@@ -12,6 +12,7 @@
 #   │   • Sets up Node.js 20                              │
 #   │   • Installs all npm workspace dependencies         │
 #   │   • Runs lint across the monorepo via Turborepo     │
+#   │   • Runs unit tests across the monorepo             │
 #   │   • Builds packages/backend (Fastify / TypeScript)  │
 #   │   • Builds packages/frontend (Next.js)              │
 #   └─────────────────────────────────────────────────────┘
@@ -106,6 +107,11 @@ jobs:
       #    A non-zero exit code fails the job and blocks merging.
       - name: Lint (Turborepo)
         run: npx turbo run lint
+
+      # 4.5. Test — executes unit tests for the frontend and backend.
+      #      Satisfies Issue #45 Acceptance Criteria Step 2.
+      - name: Test (Turborepo)
+        run: npx turbo run test
 
       # 5. Build — compiles both the Fastify backend (tsc) and the Next.js
       #    frontend (next build). Turborepo respects the `dependsOn` graph in
