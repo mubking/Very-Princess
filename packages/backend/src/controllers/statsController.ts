@@ -7,6 +7,7 @@
  */
 
 import { stellarService } from "../services/stellarService.js";
+import { safeGet, safeSet } from "../services/cache.js";
 
 export interface GlobalStatsResponse {
   /** Number of registered organizations on-chain. */
@@ -31,6 +32,12 @@ function stroopsToXlm(stroops: bigint): string {
 
 export const statsController = {
   async getGlobalStats(): Promise<GlobalStatsResponse> {
+    const cacheKey = "stats:global";
+    const cached = await safeGet(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+
     const orgs = await stellarService.readAllOrganizations();
 
     let totalFunded = 0n;
@@ -53,9 +60,9 @@ export const statsController = {
     );
 
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + 60_000);
+    const expiresAt = new Date(now.getTime() + 300_000); // 5 minutes
 
-    return {
+    const response: GlobalStatsResponse = {
       totalOrganizations: orgs.length,
       totalFundedStroops: totalFunded.toString(),
       totalFundedXlm: stroopsToXlm(totalFunded),
@@ -64,5 +71,9 @@ export const statsController = {
       cachedAt: now.toISOString(),
       cacheExpiresAt: expiresAt.toISOString(),
     };
+
+    await safeSet(cacheKey, JSON.stringify(response), 300);
+
+    return response;
   },
 } as const;

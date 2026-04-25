@@ -73,3 +73,9 @@ export const NETWORK_PASSPHRASE = env(
  * Written to .env.contracts by packages/contracts/scripts/deploy.sh.
  */
 export const CONTRACT_ID = env("CONTRACT_ID", "");
+
+/**
+ * The ledger sequence number when the contract was deployed.
+ * Used to initialize the indexer's cursor.
+ */
+export const DEPLOYMENT_LEDGER = parseInt(env("DEPLOYMENT_LEDGER", "0"), 10);

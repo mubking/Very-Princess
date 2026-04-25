@@ -30,3 +30,18 @@ model Transaction {
   @@index([createdAt])
   @@index([walletAddress])
 }
+
+model IndexerState {
+  id                  String   @id @default("default")
+  lastProcessedLedger Int
+  updatedAt           DateTime @updatedAt
+}
+
+model VerifiedContract {
+  address    String   @id
+  isVerified Boolean  @default(true)
+  riskLevel  String   @default("LOW") // LOW, MEDIUM, HIGH
+  createdAt  DateTime @default(now())
+
+  @@index([address])
+}
