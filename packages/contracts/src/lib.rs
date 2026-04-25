@@ -23,6 +23,14 @@ pub struct Maintainer {
     pub org_id: Symbol,
 }
 
+/// Represents a single payout entry in a batch allocation.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayoutParams {
+    pub maintainer: Address,
+    pub amount: i128,
+}
+
 #[contracttype]
 pub enum DataKey {
     /// The global Stellar Asset Contract address configured during initialization.
@@ -49,8 +57,6 @@ impl PayoutRegistry {
     // Initialization
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// Initialize the contract with a single global token (e.g. USDC or XLM).
-    /// This can only be called once.
     pub fn init(env: Env, token: Address) {
         if env.storage().persistent().has(&DataKey::Token) {
             panic!("already initialized");
@@ -58,10 +64,6 @@ impl PayoutRegistry {
         env.storage().persistent().set(&DataKey::Token, &token);
     }
 
-    /// Retrieve the global token address.
-    ///
-    /// # Panics
-    /// If the contract has not been initialized.
     pub fn get_token(env: Env) -> Address {
         env.storage()
             .persistent()
@@ -113,10 +115,6 @@ impl PayoutRegistry {
             .expect("organization not found")
     }
 
-    /// Fund an organization's budget.
-    ///
-    /// Anyone can deposit tokens into the registry earmarked for an organization.
-    /// The tokens are transferred from `from` to the contract's address.
     pub fn fund_org(env: Env, org_id: Symbol, from: Address, amount: i128) {
         from.require_auth();
 
@@ -242,19 +240,16 @@ impl PayoutRegistry {
             panic!("maintainer does not belong to this organization");
         }
 
-        // Check if there is enough budget
         let budget_key = DataKey::OrgBudget(org_id.clone());
         let current_budget: i128 = env.storage().persistent().get(&budget_key).unwrap_or(0);
         if current_budget < amount {
             panic!("insufficient organization budget");
         }
 
-        // Deduct from OrgBudget
         env.storage()
             .persistent()
             .set(&budget_key, &(current_budget - amount));
 
-        // Accumulate the claimable balance.
         let balance_key = DataKey::MaintainerBalance(maintainer.clone());
         let current_balance: i128 = env
             .storage()
@@ -267,6 +262,90 @@ impl PayoutRegistry {
         env.events().publish(
             (symbol_short!("payout"), symbol_short!("allocated")),
             (org_id, maintainer, amount),
+        );
+    }
+
+    /// Allocate payouts to multiple maintainers in a single transaction.
+    ///
+    /// Admin auth is required only once for the entire batch.
+    /// The total sum of all payouts must not exceed the organization's current budget.
+    /// Maximum batch size is 100 entries to stay within Soroban CPU/instruction limits.
+    pub fn batch_allocate(
+        env: Env,
+        admin: Address,
+        org_id: Symbol,
+        payouts: Vec<PayoutParams>,
+    ) {
+        // Require admin auth once for the entire batch
+        admin.require_auth();
+
+        // Verify caller is the registered admin for this org
+        let stored_admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OrgAdmin(org_id.clone()))
+            .expect("organization not found");
+        if stored_admin != admin {
+            panic!("caller is not the organization admin");
+        }
+
+        // Enforce batch size limit to prevent out-of-gas errors
+        if payouts.len() > 100 {
+            panic!("batch size exceeds maximum of 100");
+        }
+
+        if payouts.is_empty() {
+            panic!("payouts list must not be empty");
+        }
+
+        // Compute total payout sum and validate each entry before touching storage
+        let mut total: i128 = 0_i128;
+        for i in 0..payouts.len() {
+            let entry = payouts.get(i).unwrap();
+            if entry.amount <= 0 {
+                panic!("payout amount must be positive");
+            }
+            let maintainer_org: Symbol = env
+                .storage()
+                .persistent()
+                .get(&DataKey::MaintainerOrg(entry.maintainer.clone()))
+                .expect("maintainer not registered");
+            if maintainer_org != org_id {
+                panic!("maintainer does not belong to this organization");
+            }
+            total += entry.amount;
+        }
+
+        // Verify the org has enough budget to cover the entire batch
+        let budget_key = DataKey::OrgBudget(org_id.clone());
+        let current_budget: i128 = env.storage().persistent().get(&budget_key).unwrap_or(0);
+        if current_budget < total {
+            panic!("insufficient organization budget for batch");
+        }
+
+        // Deduct total from org budget in one write
+        env.storage()
+            .persistent()
+            .set(&budget_key, &(current_budget - total));
+
+        // Accumulate each maintainer's claimable balance
+        for i in 0..payouts.len() {
+            let entry = payouts.get(i).unwrap();
+            let balance_key = DataKey::MaintainerBalance(entry.maintainer.clone());
+            let current_balance: i128 = env
+                .storage()
+                .persistent()
+                .get(&balance_key)
+                .unwrap_or(0_i128);
+            env.storage()
+                .persistent()
+                .set(&balance_key, &(current_balance + entry.amount));
+        }
+
+        // Emit a single batch_allocated event
+        env.events().publish(
+            (symbol_short!("payout"), symbol_short!("batch_alc")),
+            (org_id, admin, total),
         );
     }
 
@@ -291,10 +370,9 @@ impl PayoutRegistry {
             panic!("no claimable balance");
         }
 
-        // Reset the balance BEFORE the transfer (Checks-Effects-Interactions)
+        // Reset balance BEFORE transfer (Checks-Effects-Interactions)
         env.storage().persistent().set(&balance_key, &0_i128);
 
-        // Perform token transfer to the maintainer
         let token = Self::get_token(env.clone());
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(&env.current_contract_address(), &maintainer, &claimable);
@@ -307,155 +385,5 @@ impl PayoutRegistry {
         claimable
     }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Unit Tests
-// ─────────────────────────────────────────────────────────────────────────────
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{symbol_short, token, Env, String};
-
-    // ── Test Helpers ─────────────────────────────────────────────────────────
-
-    struct Setup {
-        env: Env,
-        client: PayoutRegistryClient<'static>,
-        token_admin: Address,
-        token: token::StellarAssetClient<'static>,
-    }
-
-    /// Create a fresh Env with mock auth, a token, and a deployed PayoutRegistry initialized.
-    fn setup() -> Setup {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        // Create a mock Stellar Asset token using SDK v21 compatible method
-        let token_admin = Address::generate(&env);
-        let token_contract_id = env.register_stellar_asset_contract_v2(token_admin.clone());
-        let token_client = token::StellarAssetClient::new(&env, &token_contract_id.address());
-
-        // Register Registry
-        let contract_id = env.register_contract(None, PayoutRegistry);
-        let client = PayoutRegistryClient::new(&env, &contract_id);
-
-        // Init Registry
-        client.init(&token_contract_id.address());
-
-        Setup {
-            env,
-            client,
-            token_admin,
-            token: token_client,
-        }
-    }
-
-    fn register_test_org(env: &Env, client: &PayoutRegistryClient, org_sym: Symbol) -> Address {
-        let admin = Address::generate(env);
-        client.register_org(
-            &org_sym,
-            &String::from_str(env, "Test Organization"),
-            &admin,
-        );
-        admin
-    }
-
-    #[test]
-    fn test_init() {
-        let Setup { env, client, .. } = setup();
-        // Trying to init again should panic
-        let additional_token = Address::generate(&env);
-        // We use try_init so we can check the error
-        let result = client.try_init(&additional_token);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_register_and_get_org() {
-        let Setup { env, client, .. } = setup();
-        let org_sym = symbol_short!("myorg");
-        let admin = register_test_org(&env, &client, org_sym.clone());
-
-        let org = client.get_org(&org_sym);
-        assert_eq!(org.id, org_sym);
-        assert_eq!(org.admin, admin);
-        assert_eq!(client.get_org_budget(&org_sym), 0);
-    }
-
-    #[test]
-    fn test_fund_org() {
-        let Setup {
-            env,
-            client,
-            token,
-            token_admin: _token_admin,
-            ..
-        } = setup();
-        let org_sym = symbol_short!("myorg");
-        register_test_org(&env, &client, org_sym.clone());
-
-        let donor = Address::generate(&env);
-        let token_client = token::Client::new(&env, &token.address);
-
-        // Mint tokens to donor
-        token.mint(&donor, &100_000_000);
-        assert_eq!(token_client.balance(&donor), 100_000_000);
-
-        // Fund org
-        client.fund_org(&org_sym, &donor, &50_000_000);
-
-        assert_eq!(client.get_org_budget(&org_sym), 50_000_000);
-        // Verify tokens are in the contract
-        assert_eq!(token_client.balance(&client.address), 50_000_000);
-        assert_eq!(token_client.balance(&donor), 50_000_000);
-    }
-
-    #[test]
-    #[should_panic(expected = "insufficient organization budget")]
-    fn test_allocate_without_budget_panics() {
-        let Setup { env, client, .. } = setup();
-        let org_sym = symbol_short!("myorg");
-        register_test_org(&env, &client, org_sym.clone());
-
-        let maintainer = Address::generate(&env);
-        client.add_maintainer(&org_sym, &maintainer);
-
-        // Budget is zero, so this panics
-        client.allocate_payout(&org_sym, &maintainer, &5_000_000_i128);
-    }
-
-    #[test]
-    fn test_allocate_and_claim_with_tokens() {
-        let Setup {
-            env, client, token, ..
-        } = setup();
-        let org_sym = symbol_short!("myorg");
-        register_test_org(&env, &client, org_sym.clone());
-
-        let maintainer = Address::generate(&env);
-        client.add_maintainer(&org_sym, &maintainer);
-
-        let donor = Address::generate(&env);
-        let token_client = token::Client::new(&env, &token.address);
-        token.mint(&donor, &20_000_000);
-
-        client.fund_org(&org_sym, &donor, &20_000_000);
-
-        // Allocate
-        client.allocate_payout(&org_sym, &maintainer, &5_000_000_i128);
-        assert_eq!(client.get_claimable_balance(&maintainer), 5_000_000);
-        assert_eq!(client.get_org_budget(&org_sym), 15_000_000); // 20M - 5M
-
-        // Maintainer Claims
-        assert_eq!(token_client.balance(&maintainer), 0);
-        let claimed = client.claim_payout(&maintainer);
-        assert_eq!(claimed, 5_000_000);
-
-        // Assert token state
-        assert_eq!(client.get_claimable_balance(&maintainer), 0);
-        assert_eq!(token_client.balance(&maintainer), 5_000_000);
-        assert_eq!(token_client.balance(&client.address), 15_000_000); // Only org budget left
-    }
-}
+mod tests;
