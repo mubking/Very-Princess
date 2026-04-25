@@ -8,6 +8,7 @@
 
 import { stellarService } from "../services/stellarService.js";
 import { safeGet, safeSet } from "../services/cache.js";
+import { prisma } from "../services/db.js";
 
 export interface GlobalStatsResponse {
   /** Number of registered organizations on-chain. */
@@ -28,6 +29,22 @@ export interface GlobalStatsResponse {
 
 function stroopsToXlm(stroops: bigint): string {
   return (Number(stroops) / 10_000_000).toFixed(7);
+}
+
+/**
+ * Format a number as abbreviated string (e.g., 14.5M instead of 14500000).
+ */
+function formatShort(value: number): string {
+  if (value >= 1_000_000_000) {
+    return (value / 1_000_000_000).toFixed(1).replace(/\.0$/, "") + "B";
+  }
+  if (value >= 1_000_000) {
+    return (value / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
+  }
+  if (value >= 1_000) {
+    return (value / 1_000).toFixed(1).replace(/\.0$/, "") + "K";
+  }
+  return value.toFixed(2);
 }
 
 export const statsController = {
@@ -76,4 +93,47 @@ export const statsController = {
 
     return response;
   },
+
+  /**
+   * Get Total Value Locked (TVL) across the platform.
+   * Aggregates faceValue of all active, non-repaid invoices.
+   *
+   * @param format - 'full' returns exact value, 'short' returns abbreviated (e.g., 14.5M)
+   */
+  async getTVL(format: "full" | "short" = "full"): Promise<TVLResponse> {
+    const cacheKey = `stats:tvl:${format}`;
+    const cached = await safeGet(cacheKey);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+
+    // Aggregate sum of faceValueUSD for all active invoices
+    const result = await prisma.invoice.aggregate({
+      where: {
+        status: "ACTIVE",
+      },
+      _sum: {
+        faceValueUSD: true,
+      },
+    });
+
+    const totalUSD = result._sum.faceValueUSD?.toNumber() ?? 0;
+    const now = new Date();
+
+    const response: TVLResponse = {
+      tvlUSD: format === "short" ? formatShort(totalUSD) : totalUSD.toFixed(2),
+      lastUpdated: now.toISOString(),
+    };
+
+    await safeSet(cacheKey, JSON.stringify(response), 60); // Cache for 1 minute
+
+    return response;
+  },
 } as const;
+
+export interface TVLResponse {
+  /** Total Value Locked in USD. */
+  tvlUSD: string;
+  /** ISO timestamp of when this value was computed. */
+  lastUpdated: string;
+}

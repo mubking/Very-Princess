@@ -22,13 +22,20 @@ model Organization {
 
 model Transaction {
   id            String   @id @default(cuid())
+  txHash        String   // Blockchain transaction hash
+  eventIndex    Int      // Index of the event within the transaction
   walletAddress String
   volumeUSD     Decimal
   createdAt     DateTime @default(now())
-  type          String   // e.g., "PURCHASE", "MINT"
+  type          String   // e.g., "PAYOUT_ALLOCATED", "ORG_FUNDED", "PAYOUT_CLAIMED"
+  ledger        Int      // Ledger sequence number
+  rawData       String?  // JSON-encoded raw event data for debugging
 
+  @@unique([txHash, eventIndex]) // Prevents duplicate processing
   @@index([createdAt])
   @@index([walletAddress])
+  @@index([txHash])
+  @@index([ledger])
 }
 
 model IndexerState {
@@ -44,4 +51,29 @@ model VerifiedContract {
   createdAt  DateTime @default(now())
 
   @@index([address])
+}
+
+enum InvoiceStatus {
+  ACTIVE      // Minted and currently active
+  REPAID      // Fully repaid/settled
+  CANCELLED   // Cancelled before repayment
+  OVERDUE     // Past due date but not repaid
+}
+
+model Invoice {
+  id           String        @id @default(cuid())
+  invoiceId    String        @unique // On-chain invoice identifier
+  faceValue    Decimal       // Value in stroops (smallest unit)
+  faceValueUSD Decimal       // Value in USD (for stablecoin/oracle integration)
+  status       InvoiceStatus @default(ACTIVE)
+  issuer       String        // Wallet address of issuer
+  holder       String?       // Current holder address (if transferred)
+  dueDate      DateTime?     // Optional due date
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  repaidAt     DateTime?     // When the invoice was repaid
+
+  @@index([status])
+  @@index([issuer])
+  @@index([createdAt])
 }

@@ -39,6 +39,7 @@ import {
   RPC_URL,
 } from "../config/env.js";
 import { withRetry } from "../utils/retry.js";
+import { decodeI128ToBigInt, stroopsToXlm, decodeBase64Xdr } from "../utils/xdrDecoder.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -232,9 +233,9 @@ export class StellarService {
           ? (scValToNative(event.topic[2]) as string)
           : "unknown";
 
-        const amount = BigInt(
-          scValToNative(event.value) as number
-        );
+        // Use decodeI128ToBigInt for proper i128 handling (prevents JS number precision loss)
+        const valueScVal = decodeBase64Xdr(event.value);
+        const amount = decodeI128ToBigInt(valueScVal);
 
         orgSet.add(orgId);
         totalStroops += amount;
@@ -256,7 +257,7 @@ export class StellarService {
     return {
       address: maintainerAddress,
       totalStroops,
-      totalXlm: (Number(totalStroops) / 10_000_000).toFixed(7),
+      totalXlm: stroopsToXlm(totalStroops),
       orgIds: [...orgSet],
       payouts,
     };
@@ -272,7 +273,7 @@ export class StellarService {
     try {
       // Get the ledger info to establish baseline
       const ledger = await this._callWithRetry(() => this.rpcServer.getLatestLedger());
-      
+
       // In a real implementation, you would query specific contract storage keys
       // For now, we'll return basic contract information
       const contractState = {
@@ -294,18 +295,65 @@ export class StellarService {
    * Fetch Soroban events for the contract within a ledger range.
    * 
    * @param startLedger - The beginning ledger sequence (inclusive)
+   * @param topics - Optional topic filters (XDR-encoded strings)
+   * @param limit - Maximum number of events to return
    * @returns Array of events
    */
-  async getEvents(startLedger: number): Promise<SorobanRpc.Api.GetEventsResponse> {
+  async getEvents(
+    startLedger: number,
+    topics?: string[][],
+    limit: number = 1000
+  ): Promise<SorobanRpc.Api.GetEventsResponse> {
     return this._callWithRetry(() => this.rpcServer.getEvents({
       startLedger,
       filters: [
         {
           type: "contract",
           contractIds: [CONTRACT_ID],
+          topics: topics ?? [],
         },
       ],
+      limit,
     }));
+  }
+
+  /**
+   * Fetch Soroban events for a specific ledger range with end ledger.
+   * Used for batched querying to avoid timeouts.
+   * 
+   * @param startLedger - The beginning ledger sequence (inclusive)
+   * @param endLedger - The ending ledger sequence (inclusive)
+   * @param topics - Optional topic filters (XDR-encoded strings)
+   * @param limit - Maximum number of events to return
+   * @returns Array of events
+   */
+  async getEventsInRange(
+    startLedger: number,
+    endLedger: number,
+    topics?: string[][],
+    limit: number = 1000
+  ): Promise<SorobanRpc.Api.GetEventsResponse> {
+    return this._callWithRetry(() => this.rpcServer.getEvents({
+      startLedger,
+      endLedger,
+      filters: [
+        {
+          type: "contract",
+          contractIds: [CONTRACT_ID],
+          topics: topics ?? [],
+        },
+      ],
+      limit,
+    }));
+  }
+
+  /**
+   * Get the latest ledger sequence number.
+   * Used to determine the upper bound for event queries.
+   */
+  async getLatestLedger(): Promise<number> {
+    const ledger = await this._callWithRetry(() => this.rpcServer.getLatestLedger());
+    return ledger.sequence;
   }
 
   // ── Soroban Write Operations ──────────────────────────────────────────────
@@ -548,13 +596,13 @@ export class StellarService {
 
     // Simulate the transaction to get the transaction data
     const simResult = await this._callWithRetry(() => this.rpcServer.simulateTransaction(transaction));
-    
+
     if (SorobanRpc.Api.isSimulationError(simResult)) {
       throw new Error(`Simulation error: ${simResult.error}`);
     }
 
     // Prepare the transaction for signing
-    const preparedTx = await this._callWithRetry(() => 
+    const preparedTx = await this._callWithRetry(() =>
       this.rpcServer.prepareTransaction(transaction, simResult)
     );
 
@@ -566,7 +614,7 @@ export class StellarService {
    */
   async submitTransaction(signedTransactionXdr: string): Promise<ContractCallResult> {
     const transaction = TransactionBuilder.fromXDR(signedTransactionXdr, NETWORK_PASSPHRASE);
-    
+
     const sendResult = await this._callWithRetry(() => this.rpcServer.sendTransaction(transaction));
 
     if (sendResult.status === "ERROR") {
