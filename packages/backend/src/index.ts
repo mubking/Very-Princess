@@ -32,6 +32,7 @@ import { statsRoutes } from "./routes/stats.js";
 import { tokenRoutes } from "./routes/token.js";
 import { eventsRoutes } from "./routes/events.js";
 import { organizationRoutes } from "./routes/organization.js";
+import { authRoutes } from "./routes/auth.js";
 import { indexerService } from "./services/indexerService.js";
 
 // ─── Server Setup ─────────────────────────────────────────────────────────────
@@ -89,6 +90,7 @@ await server.register(errorHandler);
 await server.register(contractRoutes, { prefix: "/api/v1/contract" });
 await server.register(profileRoutes, { prefix: "/api/v1/profile" });
 await server.register(tokenRoutes, { prefix: "/api/v1/tokens" });
+await server.register(authRoutes, { prefix: "/api/v1/auth" });
 
 await server.register(statsRoutes, { prefix: "/api/stats" });
 await server.register(eventsRoutes, { prefix: "/api/events" });
