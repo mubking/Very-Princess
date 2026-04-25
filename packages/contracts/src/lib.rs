@@ -132,8 +132,15 @@ impl PayoutRegistry {
     // Organisation Management & Funding
     // ─────────────────────────────────────────────────────────────────────────
 
-    pub fn register_org(env: Env, id: Symbol, name: String, admin: Address) {
+    pub fn register_org(env: Env, admin: Address, name: String) -> BytesN<32> {
         admin.require_auth();
+
+        // Generate a deterministic ID based on admin address and name
+        let mut combined_data = Vec::new(&env);
+        combined_data.push_back(admin.clone());
+        combined_data.push_back(name.clone());
+        let id_bytes = env.crypto().sha256(&combined_data);
+        let id = Symbol::new(&env, &id_bytes);
 
         let org_key = DataKey::Organization(id.clone());
 
@@ -162,9 +169,11 @@ impl PayoutRegistry {
             .set(&DataKey::OrgBudget(id.clone()), &0_i128);
 
         env.events().publish(
-    (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "OrgRegistered")),
-    id,
-);
+            (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "org_registered")),
+            (id.clone(), admin.clone()),
+        );
+
+        id_bytes
     }
 
     pub fn get_org(env: Env, id: Symbol) -> Organization {
@@ -528,14 +537,13 @@ mod tests {
         }
     }
 
-    fn register_test_org(env: &Env, client: &PayoutRegistryClient, org_sym: Symbol) -> Address {
+    fn register_test_org(env: &Env, client: &PayoutRegistryClient) -> (Address, BytesN<32>) {
         let admin = Address::generate(env);
-        client.register_org(
-            &org_sym,
-            &String::from_str(env, "Test Organization"),
+        let org_id = client.register_org(
             &admin,
+            &String::from_str(env, "Test Organization"),
         );
-        admin
+        (admin, org_id)
     }
 
     #[test]
@@ -551,8 +559,8 @@ mod tests {
     #[test]
     fn test_register_and_get_org() {
         let Setup { env, client, .. } = setup();
-        let org_sym = symbol_short!("myorg");
-        let admin = register_test_org(&env, &client, org_sym.clone());
+        let (admin, org_id_bytes) = register_test_org(&env, &client);
+        let org_sym = Symbol::new(&env, &org_id_bytes);
 
         let org = client.get_org(&org_sym);
         assert_eq!(org.id, org_sym);
@@ -569,8 +577,8 @@ mod tests {
             token_admin: _token_admin,
             ..
         } = setup();
-        let org_sym = symbol_short!("myorg");
-        register_test_org(&env, &client, org_sym.clone());
+        let (_admin, org_id_bytes) = register_test_org(&env, &client);
+        let org_sym = Symbol::new(&env, &org_id_bytes);
 
         let donor = Address::generate(&env);
         let token_client = token::Client::new(&env, &token.address);
@@ -592,8 +600,8 @@ mod tests {
     #[should_panic(expected = "insufficient organization budget")]
     fn test_allocate_without_budget_panics() {
         let Setup { env, client, .. } = setup();
-        let org_sym = symbol_short!("myorg");
-        register_test_org(&env, &client, org_sym.clone());
+        let (_admin, org_id_bytes) = register_test_org(&env, &client);
+        let org_sym = Symbol::new(&env, &org_id_bytes);
 
         let maintainer = Address::generate(&env);
         client.add_maintainer(&org_sym, &maintainer);
@@ -671,8 +679,8 @@ mod tests {
     #[should_panic(expected = "protocol is paused")]
     fn test_operations_when_paused() {
         let Setup { env, client, token, .. } = setup();
-        let org_sym = symbol_short!("myorg");
-        let admin = register_test_org(&env, &client, org_sym.clone());
+        let (_admin, org_id_bytes) = register_test_org(&env, &client);
+        let org_sym = Symbol::new(&env, &org_id_bytes);
         
         // Get the protocol admin and pause the protocol
         let protocol_admin = client.get_protocol_admin();
@@ -688,8 +696,8 @@ mod tests {
     #[test]
     fn test_operations_resume_after_unpause() {
         let Setup { env, client, token, .. } = setup();
-        let org_sym = symbol_short!("myorg");
-        let admin = register_test_org(&env, &client, org_sym.clone());
+        let (_admin, org_id_bytes) = register_test_org(&env, &client);
+        let org_sym = Symbol::new(&env, &org_id_bytes);
         
         // Get the protocol admin and pause the protocol
         let protocol_admin = client.get_protocol_admin();
@@ -713,8 +721,8 @@ mod tests {
         let Setup {
             env, client, token, ..
         } = setup();
-        let org_sym = symbol_short!("myorg");
-        register_test_org(&env, &client, org_sym.clone());
+        let (_admin, org_id_bytes) = register_test_org(&env, &client);
+        let org_sym = Symbol::new(&env, &org_id_bytes);
 
         let maintainer = Address::generate(&env);
         client.add_maintainer(&org_sym, &maintainer);
@@ -745,8 +753,8 @@ mod tests {
     #[should_panic(expected = "payout is still locked")]
     fn test_time_bound_payout_locked() {
         let Setup { env, client, token, .. } = setup();
-        let org_sym = symbol_short!("myorg");
-        register_test_org(&env, &client, org_sym.clone());
+        let (_admin, org_id_bytes) = register_test_org(&env, &client);
+        let org_sym = Symbol::new(&env, &org_id_bytes);
 
         let maintainer = Address::generate(&env);
         client.add_maintainer(&org_sym, &maintainer);
@@ -764,8 +772,8 @@ mod tests {
     #[test]
     fn test_time_bound_payout_unlocked() {
         let Setup { env, client, token, .. } = setup();
-        let org_sym = symbol_short!("myorg");
-        register_test_org(&env, &client, org_sym.clone());
+        let (_admin, org_id_bytes) = register_test_org(&env, &client);
+        let org_sym = Symbol::new(&env, &org_id_bytes);
 
         let maintainer = Address::generate(&env);
         client.add_maintainer(&org_sym, &maintainer);
