@@ -269,6 +269,43 @@ export async function buildClaimPayoutTransaction(userAddress: string): Promise<
 }
 
 /**
+ * Build, simulate, and prepare an unsigned XDR for `allocate_payout`.
+ */
+export async function buildAllocatePayoutTransaction(
+  adminAddress: string,
+  orgId: string,
+  maintainerAddress: string,
+  amountStroops: bigint
+): Promise<string> {
+  const account = await loadAccount(adminAddress);
+  const contract = new Contract(CONTRACT_ID);
+
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(
+      // @ts-ignore
+      contract.call("allocate_payout",
+        nativeToScVal(orgId, { type: "symbol" }),
+        nativeToScVal(maintainerAddress, { type: "address" }),
+        nativeToScVal(amountStroops, { type: "i128" }),
+        nativeToScVal(0, { type: "u64" })
+      )
+    )
+    .setTimeout(60)
+    .build();
+
+  const simResult = await rpcServer.simulateTransaction(tx);
+  if (SorobanRpc.Api.isSimulationError(simResult)) {
+    throw new Error(`Simulation failed: ${simResult.error}`);
+  }
+
+  const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+  return preparedTx.toXDR();
+}
+
+/**
  * Submit a signed transaction to Soroban RPC and wait for confirmation.
  * @param signedXdr — Base64 string from Freighter.
  */

@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, Address, Env, String, Symbol, Vec, BytesN,
+    contract, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env, IntoVal, String, Symbol, Vec,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -180,7 +180,9 @@ impl PayoutRegistry {
     /// The tokens are transferred from `from` to the contract's address.
     pub fn fund_org(env: Env, org_id: Symbol, from: Address, amount: i128) {
         Self::assert_active(&env);
-        from.require_auth();
+        
+        // Strict authorization: bind the signature to the exact parameters
+        from.require_auth_for_args((org_id.clone(), from.clone(), amount).into_val(&env));
 
         if amount <= 0 {
             panic!("amount must be positive");
@@ -201,9 +203,10 @@ impl PayoutRegistry {
 
         let budget_key = DataKey::OrgBudget(org_id.clone());
         let current_budget: i128 = env.storage().persistent().get(&budget_key).unwrap_or(0);
+        let new_budget = current_budget.checked_add(amount).expect("budget overflow");
         env.storage()
             .persistent()
-            .set(&budget_key, &(current_budget + amount));
+            .set(&budget_key, &new_budget);
 
         env.events().publish(
     (Symbol::new(&env, "VeryPrincess"), Symbol::new(&env, "OrgFunded")),
@@ -290,7 +293,9 @@ impl PayoutRegistry {
             .persistent()
             .get(&DataKey::OrgAdmin(org_id.clone()))
             .expect("organization not found");
-        admin.require_auth();
+        
+        // Strict authorization: ensure the admin authorizes this specific payout allocation
+        admin.require_auth_for_args((org_id.clone(), maintainer.clone(), amount, unlock_timestamp).into_val(&env));
 
         if amount <= 0 {
             panic!("payout amount must be positive");
@@ -324,7 +329,7 @@ impl PayoutRegistry {
             .persistent()
             .get(&balance_key)
             .unwrap_or(MaintainerPayout { amount: 0, unlock_timestamp: 0 });
-        current_payout.amount += amount;
+        current_payout.amount = current_payout.amount.checked_add(amount).expect("payout amount overflow");
         current_payout.unlock_timestamp = unlock_timestamp;
         env.storage().persistent().set(&balance_key, &current_payout);
 
@@ -344,7 +349,9 @@ impl PayoutRegistry {
 
     pub fn claim_payout(env: Env, maintainer: Address) -> i128 {
         Self::assert_active(&env);
-        maintainer.require_auth();
+        
+        // Strict authorization: ensure the maintainer is the one claiming
+        maintainer.require_auth_for_args((maintainer.clone(),).into_val(&env));
 
         let balance_key = DataKey::MaintainerBalance(maintainer.clone());
         let payout: MaintainerPayout = env
@@ -775,3 +782,6 @@ mod tests {
         assert_eq!(claimed, 5_000_000);
     }
 }
+
+#[cfg(test)]
+mod fuzz_tests;

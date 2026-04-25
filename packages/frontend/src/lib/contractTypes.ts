@@ -36,6 +36,8 @@ export interface MaintainerBalance {
   stroops: bigint;
   /** Human-readable XLM amount string (e.g. "1.2500000"). */
   xlm: string;
+  /** True if this is an optimistic update and hasn't been confirmed yet. */
+  isPending?: boolean;
 }
 
 /** Payout allocation payload sent to the backend API. */

@@ -26,6 +26,7 @@ import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import { SERVER_HOST, SERVER_PORT } from "./config/env.js";
 import { contractRoutes } from "./routes/contract.js";
+import rateLimit from "@fastify/rate-limit";
 import { errorHandler } from "./plugins/errorHandler.js";
 import { statsRoutes } from "./routes/stats.js";
 import { tokenRoutes } from "./routes/token.js";

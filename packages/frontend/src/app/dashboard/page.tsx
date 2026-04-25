@@ -5,12 +5,13 @@
 
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, Suspense, useOptimistic, useTransition } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { WalletButton } from "@/components/WalletButton";
 import { PayoutCard } from "@/components/PayoutCard";
 import { FundOrgModal } from "@/components/FundOrgModal";
+import { AllocatePayoutModal } from "@/components/AllocatePayoutModal";
 import { useFreighter } from "@/hooks/useFreighter";
 import {
   readOrganization,
@@ -35,6 +36,38 @@ function DashboardPageInner() {
   const [showFundModal, setShowFundModal] = useState(false);
   const [claimingAddress, setClaimingAddress] = useState<string | null>(null);
   const [balances, setBalances] = useState<MaintainerBalance[]>([]);
+  const [isPending, startTransition] = useTransition();
+  const [showAllocateModal, setShowAllocateModal] = useState(false);
+  
+  const [optimisticBalances, addOptimisticBalance] = useOptimistic(
+    balances,
+    (state, newAlloc: { address: string; amount: bigint }) => {
+      const existingIndex = state.findIndex(b => b.address === newAlloc.address);
+      if (existingIndex !== -1) {
+        const newState = [...state];
+        const current = newState[existingIndex];
+        const newStroops = current.stroops + newAlloc.amount;
+        newState[existingIndex] = {
+          ...current,
+          stroops: newStroops,
+          xlm: (Number(newStroops) / 10_000_000).toFixed(7),
+          isPending: true,
+        };
+        return newState;
+      } else {
+        return [
+          ...state,
+          {
+            address: newAlloc.address,
+            stroops: newAlloc.amount,
+            xlm: (Number(newAlloc.amount) / 10_000_000).toFixed(7),
+            isPending: true,
+          },
+        ];
+      }
+    }
+  );
+
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -256,25 +289,33 @@ function DashboardPageInner() {
                         </span>
                       </div>
                     </div>
-                    <button
-                      onClick={() => setShowFundModal(true)}
-                      className="rounded-lg bg-white/10 px-5 py-2.5 text-sm font-semibold text-white hover:bg-stellar-teal transition-all"
-                    >
-                      Fund Org
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setShowAllocateModal(true)}
+                        className="rounded-lg border border-stellar-purple/30 bg-stellar-purple/10 px-5 py-2.5 text-sm font-semibold text-stellar-purple hover:bg-stellar-purple/20 transition-all"
+                      >
+                        Allocate Payout
+                      </button>
+                      <button
+                        onClick={() => setShowFundModal(true)}
+                        className="rounded-lg bg-white/10 px-5 py-2.5 text-sm font-semibold text-white hover:bg-stellar-teal transition-all"
+                      >
+                        Fund Org
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
             )}
 
             {/* ── Maintainer Balances ── */}
-            {balances.length > 0 && (
+            {optimisticBalances.length > 0 && (
               <div>
                 <h3 className="mb-4 text-sm font-semibold uppercase tracking-widest text-white/40">
-                  Maintainers ({balances.length})
+                  Maintainers ({optimisticBalances.length})
                 </h3>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {balances.map((balance) => (
+                  {optimisticBalances.map((balance) => (
                     <PayoutCard
                       key={balance.address}
                       balance={balance}
@@ -310,6 +351,21 @@ function DashboardPageInner() {
           onSuccess={() => {
             setShowFundModal(false);
             void handleLookupOrg();
+          }}
+        />
+      )}
+
+      {showAllocateModal && organization && (
+        <AllocatePayoutModal
+          orgId={organization.id}
+          onClose={() => setShowAllocateModal(false)}
+          onSuccess={(data) => {
+            startTransition(() => {
+              addOptimisticBalance(data);
+            });
+            // The modal itself handles the transaction submission
+            // and we'll eventually refresh data when confirmed.
+            setTimeout(() => void handleLookupOrg(), 5000); 
           }}
         />
       )}
